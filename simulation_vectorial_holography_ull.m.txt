@@ -1,0 +1,210 @@
+clc
+clear all
+
+CASE = 1; % perfect USAF sample -> orientation and retardation of the birref USAF sample
+% CASE = 2; % complex field -> everything modulated
+
+dir_out = 'simulation_vectorial/';
+ss = 512;
+
+delta = pi;          % full-wave
+theta = -4*pi/8;      % 45°
+pol1 = 90;    % input polarizer at 0°
+pol2 = 0;   % analyzer at 90°
+
+I1=double(imread("USAFcut.png"));
+I1(I1<125) = 0;
+I1(I1>1) = 1;
+
+I2 = double(imread('pout.tif')); 
+I2=imresize(I2,[ss,ss]);
+I2 = I2/max(I2,[],"all");
+I2 = abs(1-I2);
+I2 = I2/max(I2,[],"all");
+
+p_im = double(imread('cameraman.tif'));
+p_im=imresize(p_im,[ss,ss]);
+p_im = (p_im/max(p_im,[],"all") * 2 * pi) - pi;
+% p = 2*p_im;
+
+if CASE == 1
+    fname = 'USAF';
+    t = ones(ss,ss);
+    theta_map = abs(1-I1)*theta;
+    % theta_map = I1 * delta;
+    p = ones(ss,ss);
+    delta_map = abs(0.75-I1)*delta;
+    % delta_map = (1-I1) * delta;
+else CASE == 2
+    fname = 'complex';
+    im = double(rgb2gray(imread('peppers.png')));
+    im=imresize(im,[ss,ss]);
+    im = im/max(im,[],"all");
+    I1(I1 == 0) = 0.05;
+    t = I1;
+    theta_map = 1*p_im;
+    p = I2* 2 * pi;
+    delta_map = 1*im * delta;
+end
+
+
+figure(1)
+subplot(2,2,1)
+imagesc(t)
+title('input amplitude')
+colormap('gray')
+colorbar()
+axis equal;axis tight
+subplot(2,2,2)
+imagesc(p)
+title('input phase')
+colormap('gray')
+colorbar()
+axis equal;axis tight
+subplot(2,2,3)
+imagesc(delta_map)
+title('input retardation')
+colormap('gray')
+colorbar()
+axis equal;axis tight
+subplot(2,2,4)
+imagesc(theta_map)
+title('input orientation')
+colormap('gray')
+colorbar()
+axis equal;axis tight
+linkaxes
+% savefig([dir_out,fname,'_input.fig'])
+
+figure(6);imagesc(theta_map/pi * 180, [0 90]); colormap hsv; colorbar
+
+%%
+E0 = t .* exp(1i.*p);
+
+J00 = simulate_jones_field(E0, delta_map, theta_map, 0, 0);
+J01 = simulate_jones_field(E0, delta_map, theta_map, 0, 90);
+J10 = simulate_jones_field(E0, delta_map, theta_map, 90, 0);
+J11 = simulate_jones_field(E0, delta_map, theta_map, 90, 90);
+%%
+
+% theta_r = 0.5 * atan(2*imag(J10)./(imag(J00-J11)));
+% delta_r = 2* atan(1*imag(J00-J11)./(cos(2*theta_r).*real(J00+J11)));
+% delta1_r = 2 * acos(0.5 * real(J00 + J11));
+% 
+% fac = 1;
+% theta_r =fac* 0.5 * atan(2*imag(J10)./(imag(J00-J11)));
+% 
+% % theta_r(theta_r<0) = 1*theta_r(theta_r<0) + pi ;
+% % theta_r = 0.5 * atan2c(2*(J10),(J00-J11));
+% % theta_r = mod(theta_r,pi);
+% % theta_r = mod(real(theta_r),pi);% + 1i * mod(imag(theta_r),pi);
+% 
+% 
+% 
+% % theta_r = 0.5 * atan2(2*(J10),(J00-J11));
+% % theta_r = 0.5* angle(2*J10./(J00-J11));
+% theta_c = 0.5 * atan(2*(J10)./(J00-J11));
+% 
+% % delta1_r = 2 * acos(0.5 * (J00 + J11));
+
+theta_r = 0.5 * atan2(2*imag(J10),imag(J00-J11));
+delta_r = 2* atan(1*imag(J00-J11)./(cos(2*theta_r).*real(J00+J11)));
+
+theta_c = 0.5 * atan(2*(J10)./(J00-J11));
+delta_c = 2* atan(1*(J00-J11)./(cos(2*theta_c).*(J00+J11)));
+theta_c = 0.5 * atan2c(2*(J10),(J00-J11));
+
+figure(4)
+subplot(1,2,1)
+imagesc((theta_r))
+title('orientation \Theta')
+colorbar()
+axis equal;axis tight
+subplot(1,2,2)
+imagesc(real(theta_c))
+title('orientation \Theta complex')
+colorbar()
+colormap('gray')
+axis equal;axis tight
+linkaxes
+savefig([dir_out,fname,'_direction.fig'])
+
+
+figure(5)
+subplot(1,2,1)
+imagesc(abs(delta_r))
+title('retardation \delta')
+colorbar()
+axis equal;axis tight
+subplot(1,2,2)
+imagesc(abs((delta_c)))
+title('retardation \delta complex')
+colorbar()
+colormap('gray')
+axis equal;axis tight
+linkaxes
+savefig([dir_out,fname,'_retardation.fig'])
+
+% figure(6)
+% imagesc(abs(delta1_r))
+% colorbar()
+
+ % figure(3);imagesc(theta_map); colorbar()
+
+
+ nbins = 256;
+figure(8)
+subplot(2,2,1)
+histogram(delta_r,nbins)
+title('\delta DSB')
+subplot(2,2,2)
+histogram(abs((delta_c)),nbins)
+title('\delta complex')
+subplot(2,2,3)
+histogram(theta_r,nbins)
+title('\Theta')
+subplot(2,2,4)
+histogram(real(theta_c),nbins)
+title('\Theta complex')
+
+
+
+%%
+% Normalize data to [0,1]
+delta_norm = mat2gray(delta_map);
+delta_norm2 = mat2gray(abs(delta_c));
+theta_norm = mat2gray(theta_map);
+theta_norm2 = mat2gray(real(theta_c));
+
+% Choose colormap
+cmap = hsv(256);
+
+% Convert indexed image to RGB
+theta_rgb = ind2rgb(gray2ind(theta_norm, 256), cmap);
+theta_rgb2 = ind2rgb(gray2ind(theta_norm2, 256), cmap);
+
+
+% Write RGB image
+imwrite(delta_norm, [dir_out, fname, '_input_ret.png']);
+imwrite(delta_norm2, [dir_out, fname, '_output_ret.png']);
+imwrite(theta_rgb, [dir_out, fname, '_input_orien.png']);
+imwrite(theta_rgb2, [dir_out, fname, '_output_orien.png']);
+
+%%
+H = mod(theta_map + 0*pi, 2*pi) / (2*pi);
+H2 = mod(real(theta_c) + 0*pi, 2*pi) / (2*pi);
+% H = delta_map;
+% Set saturation and value
+S = ones(size(H));      % full saturation
+V = ones(size(H));      % full brightness
+
+% Build HSV image
+HSV1 = cat(3, H, S, V);
+HSV2 = cat(3,H2,S,V);
+% Convert to RGB
+RGB = hsv2rgb(HSV1);
+RGB1 = hsv2rgb(HSV2);
+
+% Save
+imwrite(RGB, [dir_out, fname, '_orientation_input.png']);
+imwrite(RGB, [dir_out, fname, '_orientation_output.png']);

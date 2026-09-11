@@ -1,0 +1,98 @@
+function Eout = simulate_jones_field(E0, delta_map, theta_map, pol1_angle_deg, pol2_angle_deg)
+% simulate_field : Jones-calculus simulation of a binary phase sample
+%
+% Inputs:
+%   img               - binary mask (H x W). Black pixels = sample, white = background
+%   delta_map         - H x W or scalar: retardation (rad) for sample pixels
+%   theta_map         - H x W or scalar: fast-axis orientation (rad) for sample pixels
+%   pol1_angle_deg    - angle of input polarizer (deg)
+%   pol2_angle_deg    - angle of output polarizer (deg)
+%
+% Output:
+%   Eout              - H x W complex field *after analyzer* (scalar projection)
+[H,W] = size(E0);
+
+% --- Polarizer Jones matrices ---
+ang1 = deg2rad(pol1_angle_deg);
+ang2 = deg2rad(pol2_angle_deg);
+
+P1 = [cos(ang1)^2, cos(ang1)*sin(ang1); ...
+      cos(ang1)*sin(ang1), sin(ang1)^2];
+
+P2 = [cos(ang2)^2, cos(ang2)*sin(ang2); ...
+      cos(ang2)*sin(ang2), sin(ang2)^2];
+
+
+% Ein = [E0(:)'; zeros(1,H*W)];   % horizontal polarized base vector
+% Ein = P1 * Ein;                 % apply polarizer
+% Ein = reshape(Ein,[2,H,W]);
+
+if pol1_angle_deg == 0
+    Ein = [E0(:)'; zeros(1,H*W)];   % horizontal polarized base vector
+elseif pol1_angle_deg == 90
+    Ein = [zeros(1,H*W); E0(:)']; % vertical polarized base vector
+end
+Ein = reshape(Ein,[2,H,W]);
+
+ct = cos(theta_map);
+st = sin(theta_map);
+
+a = exp( 1i*delta_map/2);
+b = exp( -1i*delta_map/2);
+
+m11 = a.*ct.^2 + b.*st.^2;
+m22 = a.*st.^2 + b.*ct.^2;
+m12 = (a-b).*ct.*st;
+m21 = m12;
+
+% Apply sample
+Ex = squeeze(Ein(1,:,:));
+Ey = squeeze(Ein(2,:,:));
+Ex_s = m11.*Ex + m12.*Ey;
+Ey_s = m21.*Ex + m22.*Ey;
+
+% --- Apply output polarizer ---
+Eout_x = P2(1,1)*Ex_s + P2(1,2)*Ey_s;
+Eout_y = P2(2,1)*Ex_s + P2(2,2)*Ey_s;
+
+% Project onto analyzer axis → scalar field
+analyzer_vec = [cos(ang2); sin(ang2)];
+Eout = analyzer_vec(1)*Eout_x + analyzer_vec(2)*Eout_y;
+
+figure(2)
+subplot(2,3,1)
+imagesc(abs(Eout_x))
+title('amp Ex')
+colorbar()
+axis equal;axis tight
+subplot(2,3,2)
+imagesc(abs(Eout_y))
+axis equal;axis tight
+title('amp Ey')
+colorbar()
+subplot(2,3,3)
+imagesc(abs(Eout))
+colorbar()
+title('amp E scalar')
+axis equal;axis tight
+subplot(2,3,4)
+imagesc(angle(Eout_x))
+title('Phase Ex')
+axis equal;axis tight
+colorbar()
+subplot(2,3,5)
+imagesc(angle(Eout_y))
+colorbar()
+axis equal;axis tight
+title('Phase Ey')
+subplot(2,3,6)
+imagesc(angle(Eout))
+colorbar()
+title('Phase E scalar')
+colormap gray
+axis equal;axis tight
+linkaxes
+
+ figure(3); imagesc(abs(Eout)); colorbar()
+
+end

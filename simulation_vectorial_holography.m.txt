@@ -1,0 +1,147 @@
+clc
+clear all
+
+im=double(imread("USAFcut.png"));
+im(im<125) = 0;
+im(im>1) = 1;
+figure(1)
+imagesc(im)
+
+t = abs(1-0.01*im);
+t = ones(512,512);
+
+ss = 512;
+p = double(imread('cameraman.tif'));
+p=imresize(p,[ss,ss]);
+p(p<125) = 0;
+p(p>1) = pi/2;
+p = pi/2*ones(ss,ss);
+
+E0 = t ;%.* exp(1i*p);
+
+delta = pi;          % quarter-wave
+theta = pi/4;          % 45°
+pol1_angle_deg = 90;    % input polarizer at 0°
+pol2_angle_deg = 0;   % analyzer at 90°
+
+%%
+[H,W] = size(im);
+
+% --- Polarizer Jones matrices ---
+ang1 = deg2rad(pol1_angle_deg);
+ang2 = deg2rad(pol2_angle_deg);
+
+P1 = [cos(ang1)^2, cos(ang1)*sin(ang1); ...
+      cos(ang1)*sin(ang1), sin(ang1)^2];
+
+P2 = [cos(ang2)^2, cos(ang2)*sin(ang2); ...
+      cos(ang2)*sin(ang2), sin(ang2)^2];
+
+
+Ein = [E0(:)'; zeros(1,H*W)];   % horizontal polarized base vector
+Ein = P1 * Ein;                 % apply polarizer
+Ein = reshape(Ein,[2,H,W]);
+
+if pol1_angle_deg == 0
+    Ein = [E0(:)'; zeros(1,H*W)];   % horizontal polarized base vector
+elseif pol1_angle_deg == 90
+    Ein = [zeros(1,H*W); E0(:)']; % vertical polarized base vector
+end
+Ein = reshape(Ein,[2,H,W]);
+    
+
+theta_map = abs(1-im)*theta;
+% theta_map = theta * ones(ss,ss);
+delta_map = abs(1-im)*delta;
+% theta_map = abs(1-im) * theta;
+% delta_map = delta * ones(ss,ss);
+
+%%
+
+ct = cos(theta_map);
+st = sin(theta_map);
+
+a = exp( 1i*delta_map/2);
+b = exp( -1i*delta_map/2);
+
+m11 = a.*ct.^2 + b.*st.^2;
+m22 = a.*st.^2 + b.*ct.^2;
+m12 = (a-b).*ct.*st;
+m21 = m12;
+
+% Apply sample
+Ex = squeeze(Ein(1,:,:));
+Ey = squeeze(Ein(2,:,:));
+Ex_s = m11.*Ex + m12.*Ey;
+Ey_s = m21.*Ex + m22.*Ey;
+
+% --- Apply output polarizer ---
+Eout_x = P2(1,1)*Ex_s + P2(1,2)*Ey_s;
+Eout_y = P2(2,1)*Ex_s + P2(2,2)*Ey_s;
+
+% Project onto analyzer axis → scalar field
+analyzer_vec = [cos(ang2); sin(ang2)];
+Eout = analyzer_vec(1)*Eout_x + analyzer_vec(2)*Eout_y;
+
+figure(2)
+subplot(2,3,1)
+imagesc(abs(Eout_x))
+title('amp Ex')
+colorbar()
+axis equal;axis tight
+subplot(2,3,2)
+imagesc(abs(Eout_y))
+axis equal;axis tight
+title('amp Ey')
+colorbar()
+subplot(2,3,3)
+imagesc(abs(Eout))
+colorbar()
+title('amp E scalar')
+axis equal;axis tight
+subplot(2,3,4)
+imagesc(angle(Eout_x))
+title('Phase Ex')
+axis equal;axis tight
+colorbar()
+subplot(2,3,5)
+imagesc(angle(Eout_y))
+colorbar()
+axis equal;axis tight
+title('Phase Ey')
+subplot(2,3,6)
+imagesc(angle(Eout))
+colorbar()
+title('Phase E scalar')
+colormap gray
+axis equal;axis tight
+linkaxes
+
+ figure(3); imagesc(abs(Eout)); colorbar()
+%%
+
+delta = pi;
+theta = pi/4;
+% for i = 
+
+ct = cos(theta);
+st = sin(theta);
+
+a = exp( 1i*delta/2);
+b = exp( -1i*delta/2);
+
+m11 = a.*ct.^2 + b.*st.^2;
+m22 = a.*st.^2 + b.*ct.^2;
+m12 = (a-b).*ct.*st;
+m21 = m12;
+M = [m11 m12; m21 m22];
+
+a11 = cos(delta/2) + 1i * cos(2*theta) * sin(delta/2);
+a12 = 1i * sin(2*theta) * sin(delta/2);
+a22 = cos(delta/2) - 1i * cos(2*theta) * sin(delta/2);
+a21 = a12;
+A = [a11 a12; a21 a22];
+
+e = [1 0];
+P = [0 0; 0 1];
+u = P * (A * e')
