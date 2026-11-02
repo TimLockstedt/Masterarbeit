@@ -261,3 +261,65 @@ def lu_chipman_svd(M, eps=1e-12):
     orientation = 0.5 * np.arctan2(a[:, 1], a[:, 0])
 
     return D, depol, lin_ret, circ_ret, orientation
+
+
+def batched_logm(M: np.ndarray, eps: float = 1e-8) -> np.ndarray:
+    """Matrixlogarithmus fuer (:, 4, 4) ueber Eigenzerlegung (vektorisiert)."""
+    lam, V = np.linalg.eig(M)
+    # rauschbedingte reelle, nicht-positive Eigenwerte abfangen (sonst log -> i*pi)
+    bad = (np.abs(lam.imag) < 1e-12) & (lam.real < eps)
+    lam = np.where(bad, eps + 0j, lam)
+    L = (V * np.log(lam)[:, None, :]) @ np.linalg.inv(V)
+    return L.real
+
+
+def differential_decomposition(M: np.ndarray):
+    """
+    M : (N, 4, 4) (oder (:, 4, 4)) Mueller-Matrizen.
+
+    Rueckgabe (jeweils Shape (N,)):
+      Elementare Eigenschaften (Lm):
+        LB, LBp        lineare Doppelbrechung 0/90 deg bzw. +-45 deg   [rad]
+      Abgeleitet:
+        retardance     lineare Retardierung delta = hypot(LB, LBp) = sqrt(LB^2 + LBp^2)    [rad], >= 0
+        orientation    Orientierung der schnellen Achse theta = 0.5*atan2(LBp, LB),
+    """
+    M = np.asarray(M, dtype=float)
+    if M.shape[-2:] != (4, 4):
+        raise ValueError(f"Erwarte (0, 4, 4), erhalten {M.shape}")
+
+    Mn = M / M[:, 0:1, 0:1]                       # Transmission herausnormieren
+    L = batched_logm(Mn)
+    G = np.eye(4) * np.array([1,-1,-1,-1])
+    Lm = 0.5 * (L - G @ np.swapaxes(L, -1, -2) @ G)
+    LB = Lm[:, 2, 3]
+    LBp = Lm[:, 3, 1]
+
+    return np.hypot(LB, LBp), 0.5 * np.arctan2(LBp, LB)
+
+
+def differentialDecompositionFull(M: np.ndarray):
+    """
+    M : (N, 4, 4) (oder (:, 4, 4)) Mueller-Matrizen.
+
+    Rueckgabe (jeweils Shape (N,)):
+      Elementare Eigenschaften (Lm):
+        LB, LBp        lineare Doppelbrechung 0/90 deg bzw. +-45 deg   [rad]
+      Abgeleitet:
+        retardance     lineare Retardierung delta = hypot(LB, LBp) = sqrt(LB^2 + LBp^2)    [rad], >= 0
+        orientation    Orientierung der schnellen Achse theta = 0.5*atan2(LBp, LB),
+    """
+    M = np.asarray(M, dtype=float)
+    if M.shape[-2:] != (4, 4):
+        raise ValueError(f"Erwarte (0, 4, 4), erhalten {M.shape}")
+
+    Mn = M / M[:, 0:1, 0:1]                       # Transmission herausnormieren
+    L = batched_logm(Mn)
+    G = np.eye(4) * np.array([1,-1,-1,-1])
+    Lm = 0.5 * (L - G @ np.swapaxes(L, -1, -2) @ G)
+    # Lu = 0.5 * (L + G @ np.swapaxes(L, -1, -2) @ G)
+    LB = Lm[:, 2, 3]
+    LBp = Lm[:, 3, 1]
+    LD = Lm[:,0 ,1 ]
+    LDp = Lm[:,0 ,2 ]
+    return np.hypot(LB, LBp), 0.5 * np.arctan2(LBp, LB), np.hypot(LD, LDp), 0.5 * np.arctan2(LDp, LD)
