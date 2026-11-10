@@ -3,6 +3,10 @@ import matplotlib.pyplot as plt
 from PIL import Image
 import random
 from tqdm import tqdm
+import os
+from lmfit.models import Model
+from lmfit.model import save_modelresult, load_modelresult
+from tifffile import imwrite, imread
 
 def MuellerRetarder(delta, theta):
     """
@@ -323,3 +327,130 @@ def differentialDecompositionFull(M: np.ndarray):
     LD = Lm[:,0 ,1 ]
     LDp = Lm[:,0 ,2 ]
     return np.hypot(LB, LBp), 0.5 * np.arctan2(LBp, LB), np.hypot(LD, LDp), 0.5 * np.arctan2(LDp, LD)
+
+
+def createArchitecture(name):
+	Architektur = ["LCR_Calibration/LCR1", "LCR_Calibration/LCR2", "LCR_Calibration/LCR3", "LCR_Calibration/LCR4",
+				"EVCalibration/Probe1", "EVCalibration/Probe2", "EVCalibration/Probe3", "EVCalibration/Probe4",  
+				"Measurements/"
+				]
+	for ordner in Architektur:
+		os.makedirs(f"./data/{name}/{ordner}", exist_ok=True)
+	return None
+
+
+class Datensatz:
+	__rawData = []
+	__DataNames = []
+	__greenIntensity = []
+	__Volts = []
+	__numberOfFiles = 0
+	__Architektur = ["LCR_Calibration/LCR1", "LCR_Calibration/LCR2", "LCR_Calibration/LCR3", "LCR_Calibration/LCR4",
+					"EVCalibration/Probe1", "EVCalibration/Probe2", "EVCalibration/Probe3", "EVCalibration/Probe4",  
+					"Measurements/"
+					]
+	__RunName = "test"
+	
+	def get_Volts(self):
+		return self.__Volts
+	def get_GreenIntensities(self):
+		return self.__greenIntensity
+	def get_rawData(self):
+		return self.__rawData
+	def get_DataNames(self):
+		return self.__DataNames
+	def get_NumFiles(self):
+		return self.__numberOfFiles
+	def get_RunName(self):
+			return self.__RunName
+
+	def getFilesOfType(self, pathStr:str, Type:str=".csv"):
+		DateienOfType = [
+			datei for datei in os.listdir(f"./data/{self.__RunName}/{pathStr}")
+			if datei.lower().endswith(".csv")
+		]
+		return DateienOfType
+	
+	def __init__(self, RunName:str = None, numerOfRetarders:int = 4, Type:str = None):
+		self.__rawData = []
+		self.__DataNames = []
+		self.__greenIntensity = []
+		self.__Volts = []
+		self.__numberOfFiles = 0
+		self.__RunName = "test"
+		if RunName != None:
+			self.__RunName = RunName
+			for index in range(numerOfRetarders):
+				temp = self.getFilesOfType(self.__Architektur[index], Type)
+				if len(temp) == 1:
+					path = f"./data/{self.__RunName}/{self.__Architektur[index]}/{temp[0]}"
+				else:
+					print(f"There are {len(temp)} csv Files within directory ./data/{self.__RunName}/{self.__Architektur[index]}, please only supply a singular file for nonabiguity")
+				self.__numberOfFiles += 1
+				temp = np.loadtxt(path, delimiter=",", dtype=str)
+				self.__rawData.append(np.array(temp[1:, :], dtype=float))
+				self.__DataNames.append(np.array(temp[0, :]))
+				self.__greenIntensity.append(self.__rawData[-1][:,7])
+				self.__Volts.append(self.__rawData[-1][:,2])
+		return print(index, " files have beein loaded")
+
+	def addFile(self, path:str):
+		temp = np.loadtxt(path, delimiter=",", dtype=str)
+		self.__numberOfFiles += 1
+		self.__rawData.append(np.array(temp[1:, :], dtype=float))
+		self.__DataNames.append(np.array(temp[0, :]))
+		self.__greenIntensity.append(self.__rawData[-1][:,7])
+		self.__Volts.append(self.__rawData[-1][:,2])
+		return
+
+	def createArchitecture(self, name = None):
+		if name != None:
+			self.__RunName = name
+		for ordner in self.__Architektur:
+			os.makedirs(f"./data/{self.__RunName}/{ordner}", exist_ok=True)
+		return None
+
+	def fitLCR(self, numberOfRetarder = 4, y_err = 1, xLabel = "Volts [V]", yLabel = "Intensity"):
+		def intens(x, Intensity=3000, a=1.1, b=8.4, c=1.28, d=4.3, e=0.45):
+			return 1/4 * (Intensity-Intensity*np.cos(a + b /(1+(x/c)**d)**e)) #e*x
+
+		mod = Model(intens)
+		pars = mod.make_params()
+
+		for Index in range(numberOfRetarder):
+			result = mod.fit(self.__greenIntensity[Index], pars, x=self.__Volts[Index])
+			dynamic_resolution_array = np.arange(min(self.__Volts[Index]),max(self.__Volts[Index]), 0.001*abs(max(self.__Volts[Index])-min(self.__Volts[Index])))
+			fig = plt.figure(figsize=(9,6), dpi=80)
+			plt.plot(dynamic_resolution_array, result.eval(x = dynamic_resolution_array), 'r-', label = r'Fit: reduced $\chi^2$ =  ' + f"{result.result.redchi:.3}")
+			plt.errorbar(
+				y = self.__greenIntensity[Index], 
+				x = self.__Volts[Index], 
+				yerr = y_err,
+				fmt = 'o', markersize = 3.5, alpha = 1, mfc = 'black', c = 'skyblue', zorder = 0, label = r'Werte'
+				) #xerr = x_err, yerr = y_err, 
+			plt.legend(loc='best')
+	
+			plt.ylabel(yLabel, fontsize=20)
+			plt.xlabel(xLabel, fontsize=20)
+	
+			plt.legend(fontsize=12)
+			plt.xticks(fontsize=16)
+			plt.yticks(fontsize=16)
+			plt.tight_layout()
+			fig.savefig(f"./data/{self.__RunName}/{self.__Architektur[Index]}/LCR{Index}_Fit.pdf")
+			plt.show()
+			save_modelresult(result, f"./data/{self.__RunName}/{self.__Architektur[Index]}/LCR{Index}_FitResult.sav")
+
+	def getVoltageMap(self, Retardences:np.ndarray ,NumberOfRetarders:int = 4):
+		# def ret(x, a=1.1, b=8.4, c=1.28, d=4.3, e=0.45):
+		# 	return a + b /(1+(x/c)**d)**e
+		def retInv(x, a=0.6, b=10, c=1, d=6.4, e=0.3):
+			return c * np.power((np.power(b/(x-a), 1/e)-1), 1/d)
+		Voltage_lst = []
+		for Index in range(NumberOfRetarders):
+			result = load_modelresult(f"./data/{self.__RunName}/{self.__Architektur[Index]}/LCR{Index}_FitResult.sav")
+			Keys = [key for key in result.params]
+			Voltages = retInv(Retardences, result.params[Keys[1]].value, result.params[Keys[2]].value, result.params[Keys[3]].value, result.params[Keys[4]].value, result.params[Keys[5]].value)
+			Voltage_lst.append(Voltages)
+			imwrite(f"./data/{self.__RunName}/{self.__Architektur[Index]}/LCR{Index}_VoltageList.tif", Voltages)
+		return Voltage_lst
