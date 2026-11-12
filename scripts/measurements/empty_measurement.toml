@@ -1,0 +1,45 @@
+# Empty measurement: the same position measured repeatedly, without a sample or with a
+# reference (e.g. opal glass diffuser), to measure noise or as a calibration measurement.
+# scripts/measurements/empty_measurement.py
+setup = "../../config/sp01"
+output = "../../results"
+
+[devices.camera]
+gain = 0                   # exposure is set per sweep below
+
+[devices.panel]
+
+# no stages (x/y not installed yet): a 5x5 tiling with zero movement, see empty_measurement.py
+# no LCVRs (pli_calibration, not implemented yet, will need them)
+
+[measurement]
+type = "sli_calibration"   # sli_calibration: SLI ring patterns; later pli_calibration: LCVR states
+repeats = [5, 5]           # tiles x00_y00 .. x04_y04, all at the same position
+
+# sli_calibration: ring geometry
+# center_px = [131, 131]  # default: config/sp01/calibration/panel_camera_center.toml
+inner_radius_px = 50
+outer_radius_px = 90
+angle_offset_deg = 90
+color_rgb = [0, 255, 0]
+
+# sli_calibration: one table per pattern set, run in this order; --coding picks one coding
+[[measurement.sweep]]
+coding = "hadamard"
+segments = 32
+exposure_ms = 1000
+
+[[measurement.sweep]]
+coding = "hadamard"
+segments = 64
+exposure_ms = 1000
+
+[[measurement.sweep]]
+coding = "canonical"       # one segment per image
+segments = 32
+exposure_ms = 5000
+
+[[measurement.sweep]]
+coding = "canonical"
+segments = 64
+exposure_ms = 10000

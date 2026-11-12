@@ -1,0 +1,26 @@
+# z-scan: one image per z position (e.g. to find the focus), green spot illumination.
+setup = "../../config/sp01"
+output = "../../results"
+
+[devices.camera]
+exposure_ms = 500
+
+[devices.panel]
+[devices.stage_z]
+
+[devices.lcvr1]
+voltage_v = 0
+[devices.lcvr2]
+voltage_v = 0
+[devices.lcvr3]
+voltage_v = 0
+[devices.lcvr4]
+voltage_v = 0
+
+[measurement]
+z_start_mm = 0.0
+z_stop_mm = 1.0
+z_step_mm = 0.25
+# center_px = [131, 131]  # default: config/sp01/calibration/panel_camera_center.toml
+radius_px = 15
+color_rgb = [0, 255, 0]

@@ -1,0 +1,46 @@
+# SLI: the illumination ring is cut into segments; one image per segment and tile.
+setup = "../../config/sp01"
+output = "../../results"
+
+[devices.camera]
+# not determined yet, depends on the coding: hadamard lights half the ring per image,
+# canonical one segment only (~segments/2 times less light; see empty_measurement.toml)
+exposure_ms = 1000
+
+[devices.panel]
+
+# LCVRs disabled for now: KLC controllers not responding (2026-11-06)
+# Test whether to set to 0 or 1lambda retardance
+# [devices.lcvr1]
+# voltage_v = 0
+# [devices.lcvr2]
+# voltage_v = 0
+# [devices.lcvr3]
+# voltage_v = 0
+# [devices.lcvr4]
+# voltage_v = 0
+
+[devices.stage_z]          # recorded; add position_mm = ... to move it at start
+# [devices.stage_x]        # not installed yet
+# [devices.stage_y]
+
+[measurement]
+# center_px = [131, 131]  # default: config/sp01/calibration/panel_camera_center.toml
+inner_radius_px = 50
+outer_radius_px = 90
+segments = 32
+angle_offset_deg = 90
+coding = "hadamard"        # "canonical": one segment per image; "hadamard": Hadamard-coded
+color_rgb = [0, 255, 0]
+
+# [measurement.grid]
+# start_mm = [40, 110]
+# count = [3, 2]
+# tile_size_mm = 2.0
+# Or draw the region on the overview image (needs [devices.overview_camera],
+# stage_x/stage_y and calibration/overview_to_stage.toml):
+# [measurement.grid]
+# roi = "overview"
+# tile_size_mm = 2.0
+# overlap_mm = 0.2
+# camera = "overview_camera"   # or "webcam"

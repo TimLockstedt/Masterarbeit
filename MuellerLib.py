@@ -438,9 +438,10 @@ class Datensatz:
 			plt.yticks(fontsize=16)
 			plt.tight_layout()
 			fig.savefig(f"./data/{self.__RunName}/{self.__Architektur[Index]}/LCR{Index}_Fit.pdf")
-			plt.show()
+			# plt.show()
 			save_modelresult(result, f"./data/{self.__RunName}/{self.__Architektur[Index]}/LCR{Index}_FitResult.sav")
 
+	
 	def getVoltageMap(self, Retardences:np.ndarray ,NumberOfRetarders:int = 4):
 		# def ret(x, a=1.1, b=8.4, c=1.28, d=4.3, e=0.45):
 		# 	return a + b /(1+(x/c)**d)**e
@@ -452,5 +453,86 @@ class Datensatz:
 			Keys = [key for key in result.params]
 			Voltages = retInv(Retardences, result.params[Keys[1]].value, result.params[Keys[2]].value, result.params[Keys[3]].value, result.params[Keys[4]].value, result.params[Keys[5]].value)
 			Voltage_lst.append(Voltages)
-			imwrite(f"./data/{self.__RunName}/{self.__Architektur[Index]}/LCR{Index}_VoltageList.tif", Voltages)
+			with open(f"./data/{self.__RunName}/{self.__Architektur[Index]}/LCR{Index}_VoltageList.npy", 'wb') as f:
+				np.save(f, Voltages)
+			#imwrite(f"./data/{self.__RunName}/{self.__Architektur[Index]}/LCR{Index}_VoltageList.tif", Voltages)
 		return Voltage_lst
+
+	def loadForEcmCal(self, numerOfRetarders:int = 4, Type:str = None, offset = 4):
+		self.__rawData = []
+		self.__DataNames = []
+		self.__greenIntensity = []
+		self.__Volts = []
+
+		for index in range(numerOfRetarders):
+			temp = self.getFilesOfType(self.__Architektur[index + offset], Type)
+			if len(temp) == 1:
+				path = f"./data/{self.__RunName}/{self.__Architektur[index + offset]}/{temp[0]}"
+			else:
+				print(f"There are {len(temp)} csv Files within directory ./data/{self.__RunName}/{self.__Architektur[index + offset]}, please only supply a singular file for nonabiguity")
+			temp = np.loadtxt(path, delimiter=",", dtype=str)
+			self.__rawData.append(np.array(temp[1:, :], dtype=float))
+			self.__DataNames.append(np.array(temp[0, :]))
+			self.__greenIntensity.append(self.__rawData[-1][:,7])
+			self.__Volts.append(self.__rawData[-1][:,2])
+		return print(index , " files have beein loaded")
+	
+	def ecm_calibrate(self, M=None):
+		"""
+		B : (K, n, m)  gemessene Matrizen B_k = A M_k W   (k=0 muss 'leer' sein)
+		M : (K, 4, 4)  bekannte Mueller-Matrizen der Proben (M[0] = Identität)
+		Rückgabe: A (n,4), W (4,m), eps_ECM, Singulärwerte
+		"""
+		if np.all(M == None):
+			M = np.array([np.eye(4), MuellerLinearPolarizer(0), MuellerLinearPolarizer(45), MuellerRetarder(90,0)])
+		self.loadForEcmCal()
+		B = np.array(self.__greenIntensity).reshape(-1,6,6)
+		
+
+		K, n, m = B.shape
+		B0PInv = pinv_rank4(B[0])                      # ~ W^+ A^+ -> inverse von (A W)
+		# C_k = B0PInv @ B_k  = W^+ A^+ A M_k W = W^+ M_k W
+		# -> W C_k = M_k W  <->  M_k W - W C_k = 0 
+		# Das Kroneker-Produkt ⊗ wird verwendet, um die Gleichung in eine lineare Form zu bringen, die für alle k gleichzeitig gelöst werden kann
+		# Siehe dazu das Markdown Bild unten
+		# pro k Vektorisierung: vec(M W - W C) = vec(M W I_m- I_4 W C)
+		# = (M ⊗ I_m - I_4 ⊗ CB0^T) vec(W) -> W hat die shape (4,m) -> vec(W) hat die Länge 4*m
+		# H W = 0
+		H = []
+		for k in range(K):
+			Ck = B0PInv @ B[k]
+			H.append(np.kron(M[k], np.eye(m)) - np.kron(np.eye(4), Ck.T))
+		H = np.vstack(H)
+		# Gesucht ist H_k vec(X) = 0, mit rauschen ist dies jedoch nun ein minimierungsproblem
+		# least squares kann auch über SVD gelöst werden, da die Lösung der kleinste Singulärwert ist
+		# Kleinster Singulärwert <-> Eigenvektor von K = H^T H zum kleinsten Eigenwert
+		# Die SVD von H = U S V^T -> K = V S U^T U S V^T = V S^2 V^T | V, U orthogonal, S diagonal
+		# kleinster eintrag von S^2 ist der kleinste Eigenwert von K, der zugehörige Eigenvektor ist die letzte Spalte von V / Zeile von V^T
+		# also reicht es nur die SVD von H zu berechnen und den letzten Eintrag von V^T zu nehmen
+		U, s, Vt = np.linalg.svd(H, full_matrices=False)
+		# kleinster singulärwert ist der letze diagonaleintrag von s, der zugehörige Eigenvektor ist die letzte Zeile von Vt
+		W = Vt[-1].reshape(4, m)
+
+		# Die Skalierung ist hier egal, da aus W -> aW folgt, A -> A/a => B = A/a M aW = A M W
+		W = W / W[0].mean()
+
+		# J(A) (- Abweichung vom Messwert) minimieren über alle Proben: B_k ≈ A (M_k W)
+		# J(A)  = sum_k || B_k - A (M_k W) ||_F^2 Soll minimiert werden
+		#       = sum_k ((B_k - A (M_k W))^T (B_k - A (M_k W)))   
+		#   ... = const. + tr(sum_k A (M_k W) (M_k W)^T A^T) - 2 tr(A sum_k B_k (M_k W)^T)   
+		#   ... = const. + tr(      A          C1      A^T) - 2 tr(A        C2         )  
+		# Ableitung nach A: A C1 A^T    
+		# 2 A C1 - 2 C2^T != 0
+		# A C1 = C2^T <=> A = C2^T C1^-1 
+		C1 = sum((M[k] @ W) @ (M[k] @ W).T for k in range(K))
+		C2 = sum(B[k] @ (M[k] @ W).T for k in range(K))
+		A = C2 @ np.linalg.inv(C1)
+
+		# eps_ecm = s[-1] / s[-2]                     # verhältnis der kleinsten Singulärwerte, sollte sehr klein sein, s[-1] -> 0
+		with open(f'./data/{self.__RunName}/CalibratedAW.npy', 'wb') as f:
+			np.save(f, A)
+			np.save(f, W)
+		# with open(f'test.npy', 'rb') as f:
+		# 	A = np.load(f)
+		# 	W = np.load(f)
+		return A, W # , eps_ecm, s
