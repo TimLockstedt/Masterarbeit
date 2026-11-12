@@ -1,0 +1,289 @@
+{
+  "started": "2026-11-12T16:37:00.952167+01:00",
+  "finished": "2026-11-12T16:38:31.736953+01:00",
+  "status": "completed",
+  "images": 0,
+  "measurement": {
+    "setup": "/mnt/data-ssd/TimLockstedt/sp-controller/config/sp01",
+    "name": null,
+    "output": null,
+    "calibration": {
+      "camera_focus": {
+        "path": "/mnt/data-ssd/TimLockstedt/sp-controller/config/sp01/calibration/camera_focus.toml",
+        "toml": "# focus calibration, 2026-11-05T15:01:25+01:00 (run 2026-11-05T15-01-25_focus, by scripts/calibrate/focus.py, now camera_focus.py)\n# green = 'sites', blur 5 px, 30 images, ROI whole frame, exposure 50 ms, gain 0\n# reference only: stage_z is not moved there automatically (manual focus)\nz_mm = 5.4465\nsharpness = 52.36\n"
+      },
+      "panel_camera_center": {
+        "path": "/mnt/data-ssd/TimLockstedt/sp-controller/config/sp01/calibration/panel_camera_center.toml",
+        "toml": "# camera centre on the panel, 2026-11-05T13:55:04+01:00 (run 2026-11-05T13-55-04_camera_center, by scripts/calibrate/camera_center.py, now panel_camera_center.py)\n# radii 15, 13, ..., 1, 0 px, probe 32 px, green pixels, gain 12 dB, 135 evaluations\ncenter_px = [131, 131]\n"
+      }
+    }
+  },
+  "parameters": {},
+  "script": {
+    "path": "/mnt/data-ssd/TimLockstedt/sp-controller/scripts/calibrate/lcvr.py",
+    "argv": [
+      "scripts/calibrate/lcvr.py",
+      "-c",
+      "132",
+      "132",
+      "-o",
+      "daten/calibration/Lcrs",
+      "-v",
+      "0.0",
+      "10",
+      "-n",
+      "101",
+      "lcvr1"
+    ],
+    "source": "#!/usr/bin/env -S uv run\n\"\"\"LCVR calibration: sweep one LCVR's voltage and record the camera intensity.\n\n    scripts/calibrate/lcvr.py lcvr1 -c 139 138 -o results/calibration   # options: --help\n\nGreen spot at --center, the other LCVRs at 0 V, one frame per voltage step at\na fixed exposure (halved and restarted on saturation).\n\nWrites <output>/<time>_lcvr_<name>/: sweep.csv, metadata.json.\n\"\"\"\n\nimport argparse\nimport csv\nfrom pathlib import Path\n\nimport numpy as np\n\nfrom spec import Run, Setup, patterns\n\nROOT = Path(__file__).resolve().parents[2]\nLCVRS = [\"lcvr1\", \"lcvr2\", \"lcvr3\", \"lcvr4\"]\nSATURATION = 0.98\nMIN_EXPOSURE_MS = 0.1\nCOLUMNS = [\"step\", \"voltage_v\", \"exposure_ms\", \"mean\", \"max\", \"mean_r\", \"mean_g\", \"mean_b\"]\n\n\nclass Saturated(Exception):\n    pass\n\n\ndef channel_means(frame, pixel_format):\n    \"\"\"Mean R, G, B of a raw BayerRG frame; empty for other formats.\"\"\"\n    if not pixel_format.startswith(\"BayerRG\"):\n        return \"\", \"\", \"\"\n    f = frame.astype(np.float64)\n    green = (f[0::2, 1::2].mean() + f[1::2, 0::2].mean()) / 2\n    return f[0::2, 0::2].mean(), green, f[1::2, 1::2].mean()\n\n\ndef sweep(setup, lcvr, voltages, exposure_ms, window=None):\n    camera = setup.camera\n    limit = SATURATION * camera.full_scale\n    rows = []\n    for step, voltage in enumerate(voltages):\n        setup[lcvr].set(voltage_v=float(voltage))\n        frame = camera.capture()  # waits for the LCVR (incl. its settle time)\n        peak = int(frame.max())\n        if peak >= limit:\n            print(f\"  {voltage:6.3f} V: saturated (max {peak})\")\n            raise Saturated\n        mean = float(frame.mean(dtype=np.float64))\n        rows.append([step, float(voltage), exposure_ms, mean, peak,\n                     *channel_means(frame, camera.config.pixel_format)])\n        print(f\"  {voltage:6.3f} V: mean {mean:.3f}, max {peak}\")\n        if window is not None:\n            window.plot({f\"{exposure_ms:g} ms\": [(row[1], row[3]) for row in rows]})\n            window.show(frame, f\"{lcvr} {voltage:6.3f} V @ {exposure_ms:g} ms: mean {mean:.3f}, max {peak}\")\n    return rows\n\n\ndef main():\n    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])\n    parser.add_argument(\"lcvr\", choices=LCVRS)\n    parser.add_argument(\"-c\", \"--center\", type=int, nargs=2, required=True, metavar=(\"X\", \"Y\"),\n                        help=\"camera centre on the panel (panel_camera_center.py)\")\n    parser.add_argument(\"-o\", \"--output\", type=Path, required=True, help=\"output folder\")\n    parser.add_argument(\"--instrument\", type=Path, default=ROOT / \"config\" / \"sp01\")\n    parser.add_argument(\"-r\", \"--radius\", type=int, default=15)\n    parser.add_argument(\"-e\", \"--exposure-ms\", type=float, default=500)\n    parser.add_argument(\"-v\", \"--voltage-range\", type=float, nargs=2, default=(0.0, 5.0), metavar=(\"MIN\", \"MAX\"))\n    parser.add_argument(\"-n\", \"--steps\", type=int, default=101)\n    parser.add_argument(\"--settle-ms\", type=float, help=\"override the LCVR settle time\")\n    parser.add_argument(\"--no-window\", action=\"store_true\", help=\"no window\")\n    args = parser.parse_args()\n    if args.steps < 2:\n        parser.error(\"steps must be at least 2\")\n\n    config = {args.lcvr: {\"settle_ms\": args.settle_ms}} if args.settle_ms is not None else {}\n    defaults = {name: {\"voltage_v\": 0} for name in LCVRS}\n    setup = Setup.from_folder(args.instrument, \"camera\", \"panel\", *LCVRS, config=config, defaults=defaults)\n    low, high = args.voltage_range\n    voltages = np.linspace(low, high, args.steps)\n    allowed = setup[args.lcvr].limits[\"voltage_v\"]\n    if not allowed[0] <= low < high <= allowed[1]:\n        parser.error(f\"{args.lcvr} is limited to {allowed[0]:g}..{allowed[1]:g} V\")\n    exposure = args.exposure_ms\n\n    with setup, Run(setup, args.output, f\"lcvr_{args.lcvr}\") as run:\n        window = None\n        if not args.no_window:\n            from spec.ui.gui import Window\n\n            window = Window(f\"{args.lcvr} calibration\", setup.camera, plot=(\"voltage (V)\", \"mean\"),\n                            markers={\"saturated\": SATURATION * setup.camera.full_scale})\n        setup.panel.set(pattern=patterns.ring(setup.panel.shape, args.center, args.radius + 0.5))\n        print(f\"calibrating {args.lcvr}: {low:g}..{high:g} V, {args.steps} steps\")\n        while True:\n            setup.camera.set(exposure_ms=exposure)\n            print(f\"exposure {exposure:g} ms\")\n            try:\n                rows = sweep(setup, args.lcvr, voltages, exposure, window)\n                break\n            except Saturated:\n                exposure /= 2\n                if exposure < MIN_EXPOSURE_MS:\n                    raise RuntimeError(\"camera saturates even at minimum exposure\")\n        setup[args.lcvr].set(voltage_v=0)\n        setup.panel.off()\n        with (run.path / \"sweep.csv\").open(\"x\", newline=\"\") as handle:\n            writer = csv.writer(handle)\n            writer.writerow(COLUMNS)\n            writer.writerows(rows)\n\n    best = max(rows, key=lambda row: row[3])\n    worst = min(rows, key=lambda row: row[3])\n    message = f\"max mean {best[3]:.3f} at {best[1]:.3f} V, min mean {worst[3]:.3f} at {worst[1]:.3f} V\"\n    print(f\"\\n{message}\\nsaved {run.path}\")\n    if window is not None:\n        window.finish(message)\n        window.close()\n\n\nif __name__ == \"__main__\":\n    main()\n",
+    "git": {
+      "commit": "31ade82cc86f938f577280e885a615f663e1f823",
+      "branch": "felix/twenteInclination",
+      "dirty": true
+    }
+  },
+  "versions": {
+    "python": "3.14.4 (main, Aug 20 2026, 10:41:58) [GCC 15.2.0]",
+    "spec": "0.1.dev275+g31ade82cc",
+    "numpy": "2.5.4",
+    "tifffile": "2026.10.15",
+    "pypylon": "26.9",
+    "zaber-motion": "10.2.0",
+    "KLCserial": "0.27",
+    "rspanel": "0.8.0",
+    "opencv-python-headless": "4.14.0.94"
+  },
+  "devices": {
+    "camera": {
+      "driver": "basler_camera",
+      "config": {
+        "limits": {
+          "exposure_ms": [
+            0.02,
+            10000
+          ],
+          "gain": [
+            0,
+            24
+          ]
+        },
+        "defaults": {
+          "exposure_ms": 50,
+          "gain": 0
+        },
+        "serial_number": "23446701",
+        "pixel_format": "BayerRG12",
+        "width": 3584,
+        "height": 3584,
+        "offset_x": null,
+        "offset_y": null,
+        "pfs": null,
+        "timeout_s": 10.0
+      },
+      "state": {
+        "exposure_ms": 50.0,
+        "gain": 0.0
+      },
+      "info": {
+        "vendor": "Basler",
+        "model": "acA5472-17uc",
+        "serial_number": "23446701",
+        "device_version": "N/A",
+        "pixel_format": "BayerRG12",
+        "width": 3584,
+        "height": 3584,
+        "offset_x": 956,
+        "offset_y": 44,
+        "center_x": true,
+        "center_y": true,
+        "exposure_range_ms": [
+          0.016,
+          10000.0
+        ],
+        "gain_range": [
+          -0.0,
+          27.045771199653988
+        ],
+        "firmware_version": "107772-08;U;acA5472_17uc;V1.4-7;1"
+      },
+      "source": {
+        "path": "/mnt/data-ssd/TimLockstedt/sp-controller/config/sp01/camera.toml",
+        "toml": "# Basler acA5472-17uc (main camera)\ndriver = \"basler_camera\"\nserial_number = \"23446701\"\npixel_format = \"BayerRG12\"\nwidth = 3584\nheight = 3584\ntimeout_s = 10\n\n[limits]\nexposure_ms = [0.02, 10000]\ngain = [0, 24]\n\n[defaults]\nexposure_ms = 50\ngain = 0\n",
+        "config_overrides": {},
+        "default_overrides": {}
+      }
+    },
+    "panel": {
+      "driver": "rspanel_display",
+      "config": {
+        "limits": {},
+        "defaults": {},
+        "host": "192.168.50.1",
+        "port": 9234,
+        "width": 256,
+        "height": 256,
+        "x_offset": 0,
+        "y_offset": 0,
+        "timeout_s": 5.0,
+        "load_timeout_s": 60.0,
+        "settle_ms": 50.0
+      },
+      "state": {
+        "pattern": {
+          "sha1": "aef9802fcf76c67d695bc77322bae5400d3bbe82",
+          "shape": [
+            256,
+            256,
+            3
+          ],
+          "dtype": "uint8"
+        }
+      },
+      "info": {
+        "commit_sha": "unknown",
+        "provisioned_base_sha256": "unknown",
+        "config_hash": "e178d7fdf423aeb93813b2b15ebb4b9451ba757df6935c6a0a9cae31628cfefe",
+        "width": 256,
+        "height": 256
+      },
+      "source": {
+        "path": "/mnt/data-ssd/TimLockstedt/sp-controller/config/sp01/panel.toml",
+        "toml": "# rspanel LED display (illumination)\ndriver = \"rspanel_display\"\nhost = \"192.168.50.1\"\nport = 9234\nwidth = 256\nheight = 256\nx_offset = 0\ny_offset = 0\ntimeout_s = 5\nload_timeout_s = 60\nsettle_ms = 50   # after the display reports READY\n",
+        "config_overrides": {},
+        "default_overrides": {}
+      }
+    },
+    "lcvr1": {
+      "driver": "thorlabs_klc_lcvr",
+      "config": {
+        "limits": {
+          "voltage_v": [
+            0,
+            10
+          ]
+        },
+        "defaults": {
+          "voltage_v": 0
+        },
+        "serial_number": "39334399",
+        "timeout_s": 2.0,
+        "settle_ms": 50.0,
+        "readback_tolerance_v": 0.002
+      },
+      "state": {
+        "voltage_v": 0.0
+      },
+      "info": {
+        "serial_number": "39334399",
+        "port": "/dev/serial/by-id/usb-Thorlabs_Kinesis_LC_Controller_39334399-if00-port0"
+      },
+      "source": {
+        "path": "/mnt/data-ssd/TimLockstedt/sp-controller/config/sp01/lcvr1.toml",
+        "toml": "# Thorlabs KLC101 + LCVR 1\ndriver = \"thorlabs_klc_lcvr\"\nserial_number = \"39334399\"\ntimeout_s = 2\nsettle_ms = 50   # liquid-crystal response time\n\n[limits]\nvoltage_v = [0, 10]\n\n[defaults]\nvoltage_v = 0\n",
+        "config_overrides": {},
+        "default_overrides": {
+          "voltage_v": 0
+        }
+      }
+    },
+    "lcvr2": {
+      "driver": "thorlabs_klc_lcvr",
+      "config": {
+        "limits": {
+          "voltage_v": [
+            0,
+            10
+          ]
+        },
+        "defaults": {
+          "voltage_v": 0
+        },
+        "serial_number": "39344899",
+        "timeout_s": 2.0,
+        "settle_ms": 50.0,
+        "readback_tolerance_v": 0.002
+      },
+      "state": {
+        "voltage_v": 0.0
+      },
+      "info": {
+        "serial_number": "39344899",
+        "port": "/dev/serial/by-id/usb-Thorlabs_Kinesis_LC_Controller_39344899-if00-port0"
+      },
+      "source": {
+        "path": "/mnt/data-ssd/TimLockstedt/sp-controller/config/sp01/lcvr2.toml",
+        "toml": "# Thorlabs KLC101 + LCVR 2\ndriver = \"thorlabs_klc_lcvr\"\nserial_number = \"39344899\"\ntimeout_s = 2\nsettle_ms = 50   # liquid-crystal response time\n\n[limits]\nvoltage_v = [0, 10]\n\n[defaults]\nvoltage_v = 0\n",
+        "config_overrides": {},
+        "default_overrides": {
+          "voltage_v": 0
+        }
+      }
+    },
+    "lcvr3": {
+      "driver": "thorlabs_klc_lcvr",
+      "config": {
+        "limits": {
+          "voltage_v": [
+            0,
+            10
+          ]
+        },
+        "defaults": {
+          "voltage_v": 0
+        },
+        "serial_number": "39378827",
+        "timeout_s": 2.0,
+        "settle_ms": 50.0,
+        "readback_tolerance_v": 0.002
+      },
+      "state": {
+        "voltage_v": 0.0
+      },
+      "info": {
+        "serial_number": "39378827",
+        "port": "/dev/serial/by-id/usb-Thorlabs_Kinesis_LC_Controller_39378827-if00-port0"
+      },
+      "source": {
+        "path": "/mnt/data-ssd/TimLockstedt/sp-controller/config/sp01/lcvr3.toml",
+        "toml": "# Thorlabs KLC101 + LCVR 3\ndriver = \"thorlabs_klc_lcvr\"\nserial_number = \"39378827\"\ntimeout_s = 2\nsettle_ms = 50   # liquid-crystal response time\n\n[limits]\nvoltage_v = [0, 10]\n\n[defaults]\nvoltage_v = 0\n",
+        "config_overrides": {},
+        "default_overrides": {
+          "voltage_v": 0
+        }
+      }
+    },
+    "lcvr4": {
+      "driver": "thorlabs_klc_lcvr",
+      "config": {
+        "limits": {
+          "voltage_v": [
+            0,
+            10
+          ]
+        },
+        "defaults": {
+          "voltage_v": 0
+        },
+        "serial_number": "39378829",
+        "timeout_s": 2.0,
+        "settle_ms": 50.0,
+        "readback_tolerance_v": 0.002
+      },
+      "state": {
+        "voltage_v": 0.0
+      },
+      "info": {
+        "serial_number": "39378829",
+        "port": "/dev/serial/by-id/usb-Thorlabs_Kinesis_LC_Controller_39378829-if00-port0"
+      },
+      "source": {
+        "path": "/mnt/data-ssd/TimLockstedt/sp-controller/config/sp01/lcvr4.toml",
+        "toml": "# Thorlabs KLC101 + LCVR 4\ndriver = \"thorlabs_klc_lcvr\"\nserial_number = \"39378829\"\ntimeout_s = 2\nsettle_ms = 50   # liquid-crystal response time\n\n[limits]\nvoltage_v = [0, 10]\n\n[defaults]\nvoltage_v = 0\n",
+        "config_overrides": {},
+        "default_overrides": {
+          "voltage_v": 0
+        }
+      }
+    }
+  }
+}

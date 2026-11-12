@@ -390,8 +390,8 @@ class Datensatz:
 				temp = np.loadtxt(path, delimiter=",", dtype=str)
 				self.__rawData.append(np.array(temp[1:, :], dtype=float))
 				self.__DataNames.append(np.array(temp[0, :]))
-				self.__greenIntensity.append(self.__rawData[-1][:,7])
-				self.__Volts.append(self.__rawData[-1][:,2])
+				self.__greenIntensity.append(self.__rawData[-1][:,6])
+				self.__Volts.append(self.__rawData[-1][:,1])
 		return print(index, " files have beein loaded")
 
 	def addFile(self, path:str):
@@ -399,8 +399,8 @@ class Datensatz:
 		self.__numberOfFiles += 1
 		self.__rawData.append(np.array(temp[1:, :], dtype=float))
 		self.__DataNames.append(np.array(temp[0, :]))
-		self.__greenIntensity.append(self.__rawData[-1][:,7])
-		self.__Volts.append(self.__rawData[-1][:,2])
+		self.__greenIntensity.append(self.__rawData[-1][:,6])
+		self.__Volts.append(self.__rawData[-1][:,1])
 		return
 
 	def createArchitecture(self, name = None):
@@ -411,11 +411,26 @@ class Datensatz:
 		return None
 
 	def fitLCR(self, numberOfRetarder = 4, y_err = 1, xLabel = "Volts [V]", yLabel = "Intensity"):
-		def intens(x, Intensity=3000, a=1.1, b=8.4, c=1.28, d=4.3, e=0.45):
+		def intens(x, Intensity=3000, a=0.6, b=10.4, c=1.0, d=6.3, e=0.28):
 			return 1/4 * (Intensity-Intensity*np.cos(a + b /(1+(x/c)**d)**e)) #e*x
 
+		# a   0.59509836	
+		# b	10.6031789	
+		# c	0.95045233	
+		# d	6.35931250	
+		# e	0.28353384	
 		mod = Model(intens)
 		pars = mod.make_params()
+		pars["a"].min = 0.00001
+		pars["b"].min = 8
+		pars["c"].min = 0.5
+		pars["d"].min = 4
+		pars["e"].min = 0.00001
+		pars["a"].max = 1
+		pars["b"].max = 12
+		pars["c"].max = 2
+		pars["d"].max = 10
+		pars["e"].max = 1
 
 		for Index in range(numberOfRetarder):
 			result = mod.fit(self.__greenIntensity[Index], pars, x=self.__Volts[Index])
@@ -456,6 +471,7 @@ class Datensatz:
 			with open(f"./data/{self.__RunName}/{self.__Architektur[Index]}/LCR{Index}_VoltageList.npy", 'wb') as f:
 				np.save(f, Voltages)
 			#imwrite(f"./data/{self.__RunName}/{self.__Architektur[Index]}/LCR{Index}_VoltageList.tif", Voltages)
+		print(Voltage_lst)
 		return Voltage_lst
 
 	def loadForEcmCal(self, numerOfRetarders:int = 4, Type:str = None, offset = 4):
@@ -473,8 +489,8 @@ class Datensatz:
 			temp = np.loadtxt(path, delimiter=",", dtype=str)
 			self.__rawData.append(np.array(temp[1:, :], dtype=float))
 			self.__DataNames.append(np.array(temp[0, :]))
-			self.__greenIntensity.append(self.__rawData[-1][:,7])
-			self.__Volts.append(self.__rawData[-1][:,2])
+			self.__greenIntensity.append(self.__rawData[-1][:,6])
+			self.__Volts.append(self.__rawData[-1][:,1])
 		return print(index , " files have beein loaded")
 	
 	def ecm_calibrate(self, M=None):
