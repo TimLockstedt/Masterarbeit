@@ -109,6 +109,21 @@ for directory in tileOrdner:
         imwrite(f"{FilePath}circRet.tiff", circ_Ret.astype(np.float32), compression=None) 
     except Exception as e :
         print(f"Polare zerlegung nicht geglückt: {e}")
+    RecImage = MuellerReconst.reshape(m, n, 4, 4)
+    RecImage = RecImage.transpose(2, 0, 3, 1)
+    RecImage = RecImage.reshape(4*m, 4*n)
+    Res_path = Path(f"{ergebnis_dir}")
+    Res_path.mkdir(parents=True, exist_ok=True)
+    imwrite(f"{ergebnis_dir}/{directory.name}_MuellerMatrix.tiff", RecImage.astype(np.float32), compression=None)
+
+
+
+
+# Uncalibrated Matrcies, theoretical method
+# retardences = np.array([[2, 1, 0.5, 0.5, 0.5, 0.5], [2, 2, 0.5, 1.5, 2, 1]])*np.pi
+
+
+
 
 # tiffExample = getFilesOfType(f"{tileOrdner[0]}", ".tiff")
 # with TiffFile(f"{tileOrdner[0]}/{tiffExample[0]}") as tif:

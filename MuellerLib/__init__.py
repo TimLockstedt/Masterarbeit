@@ -267,15 +267,117 @@ def lu_chipman_svd(M, eps=1e-12):
     return D, depol, lin_ret, circ_ret, orientation
 
 
-def batched_logm(M: np.ndarray, eps: float = 1e-8) -> np.ndarray:
-    """Matrixlogarithmus fuer (:, 4, 4) ueber Eigenzerlegung (vektorisiert)."""
-    lam, V = np.linalg.eig(M)
+# def batched_logm(M: np.ndarray, eps: float = 1e-8) -> np.ndarray:
+#     """Matrixlogarithmus fuer (:, 4, 4) ueber Eigenzerlegung (vektorisiert)."""
+#     lam, V = np.linalg.eig(M)
+#     # rauschbedingte reelle, nicht-positive Eigenwerte abfangen (sonst log -> i*pi)
+#     bad = (np.abs(lam.imag) < 1e-12) & (lam.real < eps)
+#     lam = np.where(bad, eps + 0j, lam)
+#     L = (V * np.log(lam)[:, None, :]) @ np.linalg.inv(V)
+#     return L.real
+
+
+# def differentialDecompositionFull(M: np.ndarray):
+#     """
+#     M : (N, 4, 4) (oder (:, 4, 4)) Mueller-Matrizen.
+
+#     Rueckgabe (jeweils Shape (N,)):
+#       Elementare Eigenschaften (Lm):
+#         LB, LBp        lineare Doppelbrechung 0/90 deg bzw. +-45 deg   [rad]
+#       Abgeleitet:
+#         retardance     lineare Retardierung delta = hypot(LB, LBp) = sqrt(LB^2 + LBp^2)    [rad], >= 0
+#         orientation    Orientierung der schnellen Achse theta = 0.5*atan2(LBp, LB),
+# 		diattenuation
+# 		angle of diattenuation
+#     """
+#     M = np.asarray(M, dtype=float)
+#     if M.shape[-2:] != (4, 4):
+#         raise ValueError(f"Erwarte (0, 4, 4), erhalten {M.shape}")
+
+#     Mn = M / M[:, 0:1, 0:1]                       # Transmission herausnormieren
+#     L = batched_logm(Mn)
+#     G = np.eye(4) * np.array([1,-1,-1,-1])
+#     Lm = 0.5 * (L - G @ np.swapaxes(L, -1, -2) @ G)
+#     # Lu = 0.5 * (L + G @ np.swapaxes(L, -1, -2) @ G)
+#     LB = Lm[:, 2, 3]
+#     LBp = Lm[:, 3, 1]
+#     LD = Lm[:,0 ,1 ]
+#     LDp = Lm[:,0 ,2 ]
+#     return np.hypot(LB, LBp), 0.5 * np.arctan2(LBp, LB), np.hypot(LD, LDp), 0.5 * np.arctan2(LDp, LD)
+
+
+
+
+from scipy.linalg import logm as _scipy_logm
+def batched_logm(M: np.ndarray, eps: float = 1e-8, cond_max: float = 1e10) -> np.ndarray:
+    """Matrixlogarithmus fuer (N, 4, 4) via Eigenzerlegung (vektorisiert).
+
+    Ungueltige Eintraege (nicht endlich) -> NaN im Ergebnis.
+    Schlecht konditionierte Eintraege (fast defekte Matrizen) -> Fallback auf
+    scipy.linalg.logm (langsamer, aber robuster); schlaegt dieser fehl -> NaN.
+    """
+    M = np.asarray(M, dtype=float)
+    out = np.full(M.shape, np.nan)
+
+    ok = np.isfinite(M).all(axis=(-2, -1))
+    if not ok.any():
+        return out
+    idx = np.flatnonzero(ok)
+
+    lam, V = np.linalg.eig(M[idx])
+
     # rauschbedingte reelle, nicht-positive Eigenwerte abfangen (sonst log -> i*pi)
     bad = (np.abs(lam.imag) < 1e-12) & (lam.real < eps)
     lam = np.where(bad, eps + 0j, lam)
-    L = (V * np.log(lam)[:, None, :]) @ np.linalg.inv(V)
-    return L.real
 
+    # Konditionierung der Eigenvektormatrix pruefen
+    cond = np.linalg.cond(V)
+    good = np.isfinite(cond) & (cond < cond_max)
+
+    # Schneller, vektorisierter Pfad nur fuer gut konditionierte Matrizen
+    if good.any():
+        Vg = V[good]
+        Lg = (Vg * np.log(lam[good])[:, None, :]) @ np.linalg.inv(Vg)
+        out[idx[good]] = Lg.real
+
+    # Langsamer Fallback fuer die uebrigen
+    for i in idx[~good]:
+        try:
+            out[i] = _scipy_logm(M[i]).real
+        except Exception:
+            pass  # bleibt NaN
+
+    # Nicht-endliche Ergebnisse sicherheitshalber auf NaN setzen
+    out[~np.isfinite(out)] = np.nan
+    return out
+
+
+def differentialDecompositionFull(M: np.ndarray, m00_min: float = 1e-12):
+    """
+    M : (N, 4, 4) Mueller-Matrizen.
+
+    Rueckgabe (jeweils Shape (N,), NaN fuer ungueltige Eintraege):
+      retardance, orientation, diattenuation, angle of diattenuation
+    """
+    M = np.asarray(M, dtype=float)
+    if M.ndim != 3 or M.shape[-2:] != (4, 4):
+        raise ValueError(f"Erwarte (N, 4, 4), erhalten {M.shape}")
+
+    m00 = M[:, 0, 0]
+    valid = np.isfinite(M).all(axis=(-2, -1)) & (np.abs(m00) > m00_min)
+
+    Mn = np.full(M.shape, np.nan)
+    Mn[valid] = M[valid] / m00[valid, None, None]   # Transmission herausnormieren
+
+    L = batched_logm(Mn)
+    G = np.diag([1.0, -1.0, -1.0, -1.0])
+    Lm = 0.5 * (L - G @ np.swapaxes(L, -1, -2) @ G)
+
+    LB, LBp = Lm[:, 2, 3], Lm[:, 3, 1]
+    LD, LDp = Lm[:, 0, 1], Lm[:, 0, 2]
+
+    return (np.hypot(LB, LBp), 0.5 * np.arctan2(LBp, LB),
+            np.hypot(LD, LDp), 0.5 * np.arctan2(LDp, LD))
 
 def differential_decomposition(M: np.ndarray):
     """
@@ -300,33 +402,6 @@ def differential_decomposition(M: np.ndarray):
     LBp = Lm[:, 3, 1]
 
     return np.hypot(LB, LBp), 0.5 * np.arctan2(LBp, LB)
-
-
-def differentialDecompositionFull(M: np.ndarray):
-    """
-    M : (N, 4, 4) (oder (:, 4, 4)) Mueller-Matrizen.
-
-    Rueckgabe (jeweils Shape (N,)):
-      Elementare Eigenschaften (Lm):
-        LB, LBp        lineare Doppelbrechung 0/90 deg bzw. +-45 deg   [rad]
-      Abgeleitet:
-        retardance     lineare Retardierung delta = hypot(LB, LBp) = sqrt(LB^2 + LBp^2)    [rad], >= 0
-        orientation    Orientierung der schnellen Achse theta = 0.5*atan2(LBp, LB),
-    """
-    M = np.asarray(M, dtype=float)
-    if M.shape[-2:] != (4, 4):
-        raise ValueError(f"Erwarte (0, 4, 4), erhalten {M.shape}")
-
-    Mn = M / M[:, 0:1, 0:1]                       # Transmission herausnormieren
-    L = batched_logm(Mn)
-    G = np.eye(4) * np.array([1,-1,-1,-1])
-    Lm = 0.5 * (L - G @ np.swapaxes(L, -1, -2) @ G)
-    # Lu = 0.5 * (L + G @ np.swapaxes(L, -1, -2) @ G)
-    LB = Lm[:, 2, 3]
-    LBp = Lm[:, 3, 1]
-    LD = Lm[:,0 ,1 ]
-    LDp = Lm[:,0 ,2 ]
-    return np.hypot(LB, LBp), 0.5 * np.arctan2(LBp, LB), np.hypot(LD, LDp), 0.5 * np.arctan2(LDp, LD)
 
 
 def createArchitecture(name):
@@ -552,3 +627,5 @@ class Datensatz:
 		# 	A = np.load(f)
 		# 	W = np.load(f)
 		return A, W # , eps_ecm, s
+
+	
