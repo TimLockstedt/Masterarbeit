@@ -55,10 +55,18 @@ if not args.calibrated:
     calibrationData = np.zeros((4,36))
     print(f"Calibrations ordner Reihenfolge: {calibrationDirs}")
     for i in range(4):
-        temp = load_tile(f"{calibrationDirs[i]}")
-        temp[temp > 256] = 256 # MUSS ANGEPASST WERDEN FÜR SINNVOLLE MAXIMALWERTE !!!
-        calibrationData[i, :] = np.mean(temp.reshape(-1, 36), axis=0)
-    calibrationData = calibrationData.reshape(4, 6, 6)        
+        temp = np.array(load_tile(f"{calibrationDirs[i]}"), dtype=np.float32)
+        m, n, o = temp.shape # l,m,n,o = temp.shape
+        # evens = np.empty((l, m, int(n/2), o), dtype=calibrationData.dtype)
+        # evens[:,0::2,:] = calibrationData[:,0::2, 0::2,:]   # gerade Zeilen: Spalten 0, 2, 4, ...
+        # evens[:,1::2,:] = calibrationData[:,1::2, 1::2,:]   # ungerade Zeilen: Spalten 1, 3, 5, ...
+        odds = np.empty((m, int(n/2), o), dtype=temp.dtype)
+        odds[0::2,:] = temp[0::2, 1::2,:]  # 01 03 05 ...
+        odds[1::2,:] = temp[1::2, 0::2,:]  # 10 12 14 ...
+        odds[odds > 256] = 256 # MUSS ANGEPASST WERDEN FÜR SINNVOLLE MAXIMALWERTE !!!
+        calibrationData[i, :] = np.mean(odds.reshape(-1, 36), axis=0)
+    calibrationData = calibrationData.reshape(4, 6, 6)  
+        
     Proben = np.array([np.eye(4), MuellerLinearPolarizer(0), MuellerLinearPolarizer(45), MuellerRetarder(90,0)])
     A, W, eps, s = ecm_calibrate(calibrationData, Proben)
     np.savetxt(f"{calibrationPath}/calibrationMatrixA.txt", A)
