@@ -1,0 +1,148 @@
+{
+  "started": "2026-11-26T12:38:35.221958+01:00",
+  "finished": "2026-11-26T12:38:43.444975+01:00",
+  "status": "completed",
+  "images": 12,
+  "measurement": {
+    "setup": "/mnt/data-ssd/TimLockstedt/sp-controller/config/sp01",
+    "name": null,
+    "output": null,
+    "calibration": {
+      "camera_focus": {
+        "path": "/mnt/data-ssd/TimLockstedt/sp-controller/config/sp01/calibration/camera_focus.toml",
+        "toml": "# focus calibration, 2026-11-05T15:01:25+01:00 (run 2026-11-05T15-01-25_focus, by scripts/calibrate/focus.py, now camera_focus.py)\n# green = 'sites', blur 5 px, 30 images, ROI whole frame, exposure 50 ms, gain 0\n# reference only: stage_z is not moved there automatically (manual focus)\nz_mm = 5.4465\nsharpness = 52.36\n"
+      },
+      "panel_camera_center": {
+        "path": "/mnt/data-ssd/TimLockstedt/sp-controller/config/sp01/calibration/panel_camera_center.toml",
+        "toml": "# camera centre on the panel, 2026-11-05T13:55:04+01:00 (run 2026-11-05T13-55-04_camera_center, by scripts/calibrate/camera_center.py, now panel_camera_center.py)\n# radii 15, 13, ..., 1, 0 px, probe 32 px, green pixels, gain 12 dB, 135 evaluations\ncenter_px = [131, 131]\n"
+      }
+    }
+  },
+  "parameters": {},
+  "script": {
+    "path": "/mnt/data-ssd/TimLockstedt/sp-controller/scripts/calibrate/deadPixelMask.py",
+    "argv": [
+      "scripts/calibrate/deadPixelMask.py",
+      "-o",
+      "daten/calibration/kamera"
+    ],
+    "source": "#!/usr/bin/env -S uv run\n\"\"\"Dead-pixel mask: images of the green dot at increasing exposure times.\n\n    scripts/calibrate/deadPixelMask.py -o results/calibration   # options: --help\n\nGreen dot at --center (as in the LCVR calibration), one frame per exposure\ntime: 100, 600, ..., 9600 ms and 10000 ms. Stops at the first saturated frame\n(kept) and then adds --fine-steps exposures spread evenly between 100 ms and\nthat saturated exposure.\n\nWrites <output>/<time>_dead_pixel_mask/: exposure_<ms>ms.tiff, metadata.json.\n\"\"\"\n\nimport argparse\nfrom pathlib import Path\n\nimport numpy as np\n\nfrom spec import Run, Setup, patterns\n\nROOT = Path(__file__).resolve().parents[2]\nEXPOSURES_MS = [*np.arange(100, 10000, 500), 10000]  # 100, 600, ..., 9600, 10000\nSATURATION = 0.98\n\n\ndef capture(setup, run, exposure_ms, label):\n    \"\"\"Capture and save one frame; returns True if it is saturated.\"\"\"\n    camera = setup.camera\n    camera.set(exposure_ms=exposure_ms)\n    frame = run.capture(camera, f\"exposure_{exposure_ms:07.1f}ms.tiff\", exposure_ms=exposure_ms)\n    peak = int(frame.max())\n    saturated = peak >= SATURATION * camera.full_scale\n    print(f\"  [{label}] {exposure_ms:7.1f} ms: mean {frame.mean(dtype=np.float64):.3f}, \"\n          f\"max {peak}{'  saturated' if saturated else ''}\")\n    return saturated\n\n\ndef main():\n    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])\n    parser.add_argument(\"-c\", \"--center\", type=int, nargs=2, default=(129, 133), metavar=(\"X\", \"Y\"),\n                        help=\"camera centre on the panel (panel_camera_center.py)\")\n    parser.add_argument(\"-o\", \"--output\", type=Path, required=True, help=\"output folder\")\n    parser.add_argument(\"--instrument\", type=Path, default=ROOT / \"config\" / \"sp01\")\n    parser.add_argument(\"-r\", \"--radius\", type=int, default=15)\n    parser.add_argument(\"-n\", \"--fine-steps\", type=int, default=10,\n                        help=\"extra exposures below the saturated one\")\n    args = parser.parse_args()\n\n    setup = Setup.from_folder(args.instrument, \"camera\", \"panel\")\n    with setup, Run(setup, args.output, \"dead_pixel_mask\") as run:\n        setup.panel.set(pattern=patterns.ring(setup.panel.shape, args.center, args.radius + 0.5))\n        print(f\"coarse: up to {len(EXPOSURES_MS)} images, \"\n              f\"{EXPOSURES_MS[0]:g}..{EXPOSURES_MS[-1]:g} ms, stop at saturation\")\n        taken = []\n        saturated_ms = None\n        for step, exposure_ms in enumerate(EXPOSURES_MS, 1):\n            exposure_ms = float(exposure_ms)\n            taken.append(exposure_ms)\n            if capture(setup, run, exposure_ms, f\"{step:2d}/{len(EXPOSURES_MS)}\"):\n                saturated_ms = exposure_ms\n                break\n\n        if saturated_ms is None:\n            print(\"never saturated: no fine steps\")\n        elif saturated_ms == EXPOSURES_MS[0]:\n            print(f\"already saturated at {saturated_ms:g} ms: no fine steps\")\n        else:\n            fine = np.linspace(EXPOSURES_MS[0], saturated_ms, args.fine_steps + 2)[1:-1]\n            fine = [ms for ms in np.round(fine, 1) if ms not in taken]\n            print(f\"fine: {len(fine)} images between {EXPOSURES_MS[0]:g} and {saturated_ms:g} ms\")\n            for step, exposure_ms in enumerate(fine, 1):\n                if capture(setup, run, float(exposure_ms), f\"{step:2d}/{len(fine)}\"):\n                    print(\"saturated: stopping the fine steps\")\n                    break\n        setup.panel.off()\n\n    print(f\"\\nsaved {run.path}\")\n\n\nif __name__ == \"__main__\":\n    main()\n",
+    "git": {
+      "commit": "ae2e7eee73ee804bca5c33dda0952759020e2934",
+      "branch": "TimMasterarbeit",
+      "dirty": true
+    }
+  },
+  "versions": {
+    "python": "3.14.4 (main, Aug 20 2026, 10:41:58) [GCC 15.2.0]",
+    "spec": "0.1.dev277+g1b58235b2.d20261117",
+    "numpy": "2.5.4",
+    "tifffile": "2026.10.15",
+    "pypylon": "26.9",
+    "zaber-motion": "10.2.0",
+    "KLCserial": "0.27",
+    "rspanel": "0.8.0",
+    "opencv-python-headless": "4.14.0.94"
+  },
+  "devices": {
+    "camera": {
+      "driver": "basler_camera",
+      "config": {
+        "limits": {
+          "exposure_ms": [
+            0.02,
+            10000
+          ],
+          "gain": [
+            0,
+            24
+          ]
+        },
+        "defaults": {
+          "exposure_ms": 50,
+          "gain": 0
+        },
+        "serial_number": "23446701",
+        "pixel_format": "BayerRG12",
+        "width": 3584,
+        "height": 3584,
+        "offset_x": null,
+        "offset_y": null,
+        "pfs": null,
+        "timeout_s": 10.0
+      },
+      "state": {
+        "exposure_ms": 50.0,
+        "gain": 0.0
+      },
+      "info": {
+        "vendor": "Basler",
+        "model": "acA5472-17uc",
+        "serial_number": "23446701",
+        "device_version": "N/A",
+        "pixel_format": "BayerRG12",
+        "width": 3584,
+        "height": 3584,
+        "offset_x": 956,
+        "offset_y": 44,
+        "center_x": true,
+        "center_y": true,
+        "exposure_range_ms": [
+          0.016,
+          10000.0
+        ],
+        "gain_range": [
+          -0.0,
+          27.045771199653988
+        ],
+        "firmware_version": "107772-08;U;acA5472_17uc;V1.4-7;1"
+      },
+      "source": {
+        "path": "/mnt/data-ssd/TimLockstedt/sp-controller/config/sp01/camera.toml",
+        "toml": "# Basler acA5472-17uc (main camera)\ndriver = \"basler_camera\"\nserial_number = \"23446701\"\npixel_format = \"BayerRG12\"\nwidth = 3584\nheight = 3584\ntimeout_s = 10\n\n[limits]\nexposure_ms = [0.02, 10000]\ngain = [0, 24]\n\n[defaults]\nexposure_ms = 50\ngain = 0\n",
+        "config_overrides": {},
+        "default_overrides": {}
+      }
+    },
+    "panel": {
+      "driver": "rspanel_display",
+      "config": {
+        "limits": {},
+        "defaults": {},
+        "host": "192.168.50.1",
+        "port": 9234,
+        "width": 256,
+        "height": 256,
+        "x_offset": 0,
+        "y_offset": 0,
+        "timeout_s": 5.0,
+        "load_timeout_s": 60.0,
+        "settle_ms": 50.0
+      },
+      "state": {
+        "pattern": {
+          "sha1": "aef9802fcf76c67d695bc77322bae5400d3bbe82",
+          "shape": [
+            256,
+            256,
+            3
+          ],
+          "dtype": "uint8"
+        }
+      },
+      "info": {
+        "commit_sha": "unknown",
+        "provisioned_base_sha256": "unknown",
+        "config_hash": "e178d7fdf423aeb93813b2b15ebb4b9451ba757df6935c6a0a9cae31628cfefe",
+        "width": 256,
+        "height": 256
+      },
+      "source": {
+        "path": "/mnt/data-ssd/TimLockstedt/sp-controller/config/sp01/panel.toml",
+        "toml": "# rspanel LED display (illumination)\ndriver = \"rspanel_display\"\nhost = \"192.168.50.1\"\nport = 9234\nwidth = 256\nheight = 256\nx_offset = 0\ny_offset = 0\ntimeout_s = 5\nload_timeout_s = 60\nsettle_ms = 50   # after the display reports READY\n",
+        "config_overrides": {},
+        "default_overrides": {}
+      }
+    }
+  }
+}
